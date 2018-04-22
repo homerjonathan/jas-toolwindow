@@ -1,0 +1,390 @@
+<link rel="import" href="../polymer/polymer-element.html">
+
+<dom-module id="jas-tool-window">
+    <template>
+        <style>
+            :host {
+                font-weight: bold;
+                position: absolute;
+                top: 135px;
+                left: 700px;
+                z-index: 10000;
+                width: 400px;
+                height: 500px;
+            }
+            .tool-window-box {
+                border-top: solid 2px;
+                border-top-color: var(--jas-tool-window-top-color, --app-primary-color);
+                z-index: 1000;
+                background-color: var(--jas-tool-window-background-color, white);
+                -moz-box-shadow:0 4px 5px 0 rgba(0,0,0,.4);
+                box-shadow:0 4px 5px 0 rgba(0,0,0,.4);
+                height: 100%;
+                width: 100%;
+            }
+            /* Important to stop property editor box trapping mouse when hidden and not been used! */
+            [hidden] {
+                pointer-events: none !important;
+            }
+            #content {
+                overflow-y: scroll;
+                height: calc(100% - 51px);
+            }
+            .noselect {
+                /*-webkit-touch-callout: none; !* iOS Safari *!*/
+                /*-webkit-user-select: none; !* Chrome/Safari/Opera *!*/
+                /*-khtml-user-select: none; !* Konqueror *!*/
+                /*-moz-user-select: none; !* Firefox *!*/
+                /*-ms-user-select: none; !* Internet Explorer/Edge *!*/
+                /*user-select: none; !* Non-prefixed version, currently*/
+                /*not supported by any browser *!*/
+            }
+            .drag-resize-selected {
+                cursor: move;
+                display: block;
+                width: 100%;
+                height: 100%;
+                position: absolute;
+                z-index: 999;
+                transform: translate3d(0, 0, 0);
+                -webkit-transform: translate3d(0, 0, 0);
+            }
+            .drag-resize-handlers {
+                position: absolute;
+                width: 5px;
+                height: 5px;
+                font-size: 1px;
+                /*background: rgb(0, 150, 253);*/
+                -webkit-transition: all 0.1s linear;
+                transition: all 0.1s linear;
+                opacity: 0;
+            }
+            .drag-resize-handlers:hover {
+                transform: scale(1.6); /*chrome*/
+                -webkit-transform: scale(1.6); /*nodewebkit*/
+                opacity: 1;
+                background: var(--app-primary-color);
+            }
+            /*
+                Individual corner classes - required for resize support.
+            */
+            .drag-resize-handlers[data-direction="tl"] {
+                top: -5px;
+                left: -5px;
+                cursor: nw-resize;
+            }
+            .drag-resize-handlers[data-direction="tm"] {
+                top: -5px;
+                left: 50%;
+                margin-left: -5px;
+                cursor: n-resize;
+            }
+            .drag-resize-handlers[data-direction="tr"] {
+                top: -5px;
+                right: -5px;
+                cursor: ne-resize;
+            }
+            .drag-resize-handlers[data-direction="ml"] {
+                top: 50%;
+                margin-top: -5px;
+                left: -5px;
+                cursor: w-resize;
+            }
+            .drag-resize-handlers[data-direction="mr"] {
+                top: 50%;
+                margin-top: -5px;
+                right: -5px;
+                cursor: e-resize;
+            }
+            .drag-resize-handlers[data-direction="bl"] {
+                bottom: -5px;
+                left: -5px;
+                cursor: sw-resize;
+            }
+            .drag-resize-handlers[data-direction="bm"] {
+                width: 100px;
+                height: 5px;
+                bottom: -5px;
+                left: 50%;
+                margin-left: -50px;
+                cursor: s-resize;
+            }
+            .drag-resize-handlers[data-direction="br"] {
+                bottom: -5px;
+                right: -5px;
+                cursor: se-resize;
+            }
+        </style>
+
+        <div class="tool-window-box drag-drop-ignore" hidden$="{{hidden}}">
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="tl"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="tm"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="tr"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="mr"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="ml"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="bl"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="bm"></div>
+            <div on-track="ontrack" class="drag-resize-handlers" data-direction="br"></div>
+            <div id="dragbar" style="cursor: move;" on-track="ontrack">
+                <div>
+                    <span class="title noselect">[[title]]</span>
+                </div>
+            </div>
+            <div class="dropdown-content drag-drop-ignore" style="height: 100%; z-index: 5000">
+                <div id="content">
+                    <slot name="toolwindow"></slot>
+                </div>
+            </div>
+        </div>
+    </template>
+</dom-module>
+<script>
+    class JasToolWindow extends Polymer.GestureEventListeners(Polymer.Element) {
+        static get is() { return 'jas-tool-window'; }
+        static get properties() {
+            return {
+                opened: {
+                    type: Boolean,
+                    value: true,
+                    notify: true
+                },
+                hidden: {
+                    type: Boolean,
+                    value: true,
+                    reflectToAttribute: true
+                },
+                title: {
+                    type: String,
+                    value: "Tool Window"
+                }
+            }
+        }
+        constructor() {
+            super();
+            this.bbox = {
+                elmX: 0,
+                elmY: 0,
+                elmH: 0,
+                elmW: 0
+            };
+        }
+        Hide() {
+            this.hidden = true;
+        }
+        Show(coords) {
+            this.hidden = false;
+            if (coords) {
+                // We have been passed coords.  Try and avoid showing over what your viewing
+                // Create a fake border line of left and right.  So tool window will move into that window
+                var toolWindowHalf = this.offsetParent.clientWidth - this.clientWidth - 200;
+                // Which Half is Tool Window in
+                if (this.offsetLeft > toolWindowHalf) {
+                    // Tool in Right hand side of page
+                    if (coords.clientX > toolWindowHalf) {
+                        // Move to Left
+                        var tempX  = coords.clientX - this.clientWidth -  200;
+                        if (tempX < 0) { tempX = 50}
+                        this.style.left = tempX + "px";
+                    }
+                } else {
+                    // Tool is in Left hand side of page
+                    if (coords.clientX < toolWindowHalf) {
+                        var tempX  = coords.clientX +  200;
+                        this.style.left = tempX + "px";
+                    }
+                }
+            }
+        }
+        connectedCallback() {
+            super.connectedCallback();
+            // Attach Listeners
+        }
+        disconnectedCallback() {
+            super.disconnectedCallback();
+        }
+        ontrack(e){
+            switch(e.detail.state) {
+                case 'start':
+                    this.drag(e);
+                    break;
+                case 'track':
+                    this.dragging(e);
+                    break;
+                case 'end':
+                    break;
+            }
+            e.stopPropagation();
+            e.preventDefault();
+        }
+        drag(e){
+            if (e.target.dataset.direction) {
+                this.resizeHandle = e.target;
+            } else {
+                this.resizeHandle = null;
+            }
+            this.element = e.target;
+        }
+        dragging(dragInfo){
+            var ddx = (dragInfo.detail.ddx) | 0;
+            var ddy = (dragInfo.detail.ddy) | 0;
+            if (this.resizeHandle) {
+                var direction = this.resizeHandle.dataset.direction;
+                var position = this.position(this);
+                this.bbox.elmX = position.left;
+                this.bbox.elmY = position.top;
+                var dimension = this.dimension(this);
+                this.bbox.elmW = dimension.width;
+                this.bbox.elmH = dimension.height;
+                this.resizeHandleDrag(ddx, ddy, direction, this);
+                this._updateOverlayAll(this);
+            }
+            else {
+                var position = this.position(this);
+                this.bbox.elmX = position.left + this.clientLeft + ddx;
+                this.bbox.elmY = position.top + this.clientTop + ddy;
+                this._updateOverlay(this);
+            }
+        }
+        /**
+         * A convenient function that computes the exact position of an element.
+         *
+         * @method position
+         * @param {DOMElement} element The element to compute.
+         * @return {Object} The current top/left position of an element.
+         */
+        position(element){
+            var offset = this.offset(element);
+            return {
+                top: offset.top - 0,
+                left: offset.left - 0
+            };
+        }
+        /**
+         * A convenient function that computes the correct offset position of an element.
+         *
+         * @method offset
+         * @param {DOMElement} element The element to compute.
+         * @return {Object} The current top/left offset position of an element.
+         */
+        offset(element){
+            var docElem;
+            var o = {
+                top: 0,
+                left: 0
+            };
+            if(element){
+                docElem = element.ownerDocument.documentElement;
+                o = {
+                    top: element.offsetTop - docElem.clientTop,
+                    left: element.offsetLeft - docElem.clientLeft
+                }
+            }
+            return o;
+        }
+        /**
+         * Changes the stored element dimensions and mouse offset X and Y.
+         *
+         * @method resizeHandleDrag
+         * @param  {Number} diffX The mouse movement amounts for X axe
+         * @param  {Number} diffY The mouse movement amounts for Y axe
+         * @param  {String} direction The resize handles that indicates wich direction is being resized.
+         * @return {Boolean} True if dimensions have been processed.
+         */
+        resizeHandleDrag(diffX, diffY, direction,element) {
+            // If the direction is one of the resize handles, resize one or two dimensions.
+            // Bounds checking is the hard bit -- basically for each edge, check that the
+            // element doesn't go under minimum size, and doesn't go beyond its boundary.
+            var minimumHeight,minimumWidth;
+            minimumWidth = 300;
+            minimumHeight = 250;
+            var dY = diffY, dX = diffX, processed = false;
+            if(!direction){
+                return false;
+            }
+            if (direction.indexOf('t') >= 0) {
+                if (this.bbox.elmH - dY < minimumHeight) {
+                    diffY = this.bbox.elmH - minimumHeight;
+                    this.mouse.offset.y = dY - diffY;
+                } else if (this.bbox.elmY + dY < this.minTop) {
+                    diffY = this.minTop - this.bbox.elmY;
+                    this.mouse.offset.y = dY - diffY;
+                }
+                this.bbox.elmY += diffY;
+                this.bbox.elmH -= diffY;
+                processed = true;
+            }
+            if (direction.indexOf('b') >= 0) {
+                if (this.bbox.elmH + dY < minimumHeight) {
+                    diffY = minimumHeight - this.bbox.elmH;
+                    this.mouse.offset.y = dY - diffY;
+                } else if (this.bbox.elmY + this.bbox.elmH + dY > this.maxTop) {
+                    diffY = this.maxTop - this.bbox.elmY - this.bbox.elmH;
+                    this.mouse.offset.y = dY - diffY;
+                }
+                this.bbox.elmH += diffY;
+                processed = true;
+            }
+            if (direction.indexOf('l') >= 0) {
+                if (this.bbox.elmW - dX < minimumWidth) {
+                    diffX = this.bbox.elmW - minimumWidth;
+                    this.mouse.offset.x = dX - diffX;
+                } else if (this.bbox.elmX + dX < this.minLeft) {
+                    diffX = this.minLeft - this.bbox.elmX;
+                    this.mouse.offset.x = dX - diffX;
+                }
+                this.bbox.elmX += diffX;
+                this.bbox.elmW -= diffX;
+                processed = true;
+            }
+            if (direction.indexOf('r') >= 0) {
+                if (this.bbox.elmW + dX < minimumWidth) {
+                    diffX = minimumWidth - this.bbox.elmW;
+                    this.mouse.offset.x = dX - diffX;
+                } else if (this.bbox.elmX + this.bbox.elmW + dX > this.maxLeft) {
+                    diffX = this.maxLeft - this.bbox.elmX - this.bbox.elmW;
+                    this.mouse.offset.x = dX - diffX;
+                }
+                this.bbox.elmW += diffX;
+                processed = true;
+            }
+            return processed;
+        }
+        /**
+         * A convenient function that computes the correct dimension of an element.
+         *
+         * @method dimension
+         * @param {DOMElement} element The element to compute.
+         * @return {Object} The current width/height of an element.
+         */
+        dimension(element){
+            function getDisplayType(element) {
+                return (element.currentStyle || window.getComputedStyle(element, '')).display;
+            }
+            var displayType = getDisplayType(element);
+            if(displayType === 'inline' || displayType === ''){
+                return element.getBoundingClientRect();
+            }
+            else {
+                return {
+                    width: element.clientWidth,
+                    height: element.clientHeight
+                }
+            }
+        }
+        _updateOverlay(pElement) {
+            pElement.style.left = this.bbox.elmX + 'px';
+            pElement.style.top = this.bbox.elmY + 'px';
+        }
+        _updateOverlayAll(pElement) {
+            pElement.style.width = this.bbox.elmW + 'px';
+            pElement.style.height = this.bbox.elmH + 'px';
+            pElement.style.left = this.bbox.elmX + 'px';
+            pElement.style.top = this.bbox.elmY + 'px';
+        }
+        _updateOverlaySize(pElement) {
+            pElement.style.width = this.bbox.elmW + 'px';
+            pElement.style.height = this.bbox.elmH + 'px';
+        }
+    }
+    customElements.define(JasToolWindow.is, JasToolWindow);
+</script>
